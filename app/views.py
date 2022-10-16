@@ -5,9 +5,9 @@ from fusionauth.fusionauth_client import FusionAuthClient
 import pkce
 
 #UPDATE ME
-api_key = ""
-client_id = "85a03867-dccf-4882-adde-1a79aeec50df"
-client_secret = "7gh9U0O1wshsrVVvflccX-UL2zxxsYccjdw8_rOfsfE"
+api_key = os.environ["FUSIONAUTH_API_KEY"]
+client_id = os.environ["FUSIONAUTH_CLIENT_ID"]
+client_secret = os.environ["FUSIONAUTH_CLIENT_SECRET"]
 host_ip = "localhost"
 #/UPDATE ME
 

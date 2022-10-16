@@ -16,15 +16,21 @@ This is based on the [5 minute setup guide](https://fusionauth.io/docs/v1/tech/5
 * `. venv/bin/activate`
 * `pip3 install -r requirements.txt`
 * Create an application in FusionAuth
-  * Set the redirect url to `http://localhost:5000/oauth-callback`
-  * Note the client id and client secret
+  * In the OAuth tab for the application configs:
+    - Set the redirect url to `http://localhost:5000/oauth-callback`
+    - Turn on the "Generate Refresh Tokens" setting
+    - Select "Refresh Token" as an enabled grant
+    - Note the client id and client secret
   * Register a user for this application
 * Create an API key in FusionAuth. (Optional, only if you want to use the client for API operations.)
-* Update `app/views.py` with the values gathered above (look for the `#UPDATE ME` section)
+* Update `app/views.py` with the values gathered above (look for the `#UPDATE ME` section), or set the following environment variables to use as-is:
+  * `FUSIONAUTH_API_KEY`
+  * `FUSIONAUTH_CLIENT_ID`
+  * `FUSIONAUTH_CLIENT_SECRET`
 
 ## Running
 
-`python3 run.py`
+`flask --app app run`
 
 Visit `http://localhost:5000`
 
