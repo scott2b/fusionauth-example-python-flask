@@ -140,7 +140,6 @@ def index():
     return render_template("public/index.html")
 
 
-#def _callback(do_register=False):
 @app.route("/oauth-callback")
 def oauth_callback():
     request.user = UnauthenticatedUser()
