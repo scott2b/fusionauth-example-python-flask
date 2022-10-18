@@ -1,104 +1,243 @@
 import os
+import urllib.parse
 from app import app
-from flask import Flask, request, render_template, send_from_directory, session
+from flask import Flask, redirect, request, render_template, send_from_directory, session, url_for
 from fusionauth.fusionauth_client import FusionAuthClient
 import pkce
 
-#UPDATE ME
-api_key = os.environ["FUSIONAUTH_API_KEY"]
-client_id = os.environ["FUSIONAUTH_CLIENT_ID"]
-client_secret = os.environ["FUSIONAUTH_CLIENT_SECRET"]
-host_ip = "localhost"
+
+#UPDATE ME (or set the environment variables)
+API_KEY = os.environ["FUSIONAUTH_API_KEY"]
+CLIENT_ID = os.environ["FUSIONAUTH_CLIENT_ID"]
+CLIENT_SECRET = os.environ["FUSIONAUTH_CLIENT_SECRET"]
+FUSIONAUTH_HOST_IP = os.environ.get("FUSIONAUTH_HOST_IP", "localhost")
+FUSIONAUTH_HOST_PORT = os.environ.get("FUSIONAUTH_HOST_PORT", "9011")
 #/UPDATE ME
 
-client = FusionAuthClient(api_key, "http://{}:9011".format(host_ip))
+
+client = FusionAuthClient(API_KEY, f"http://{FUSIONAUTH_HOST_IP}:{FUSIONAUTH_HOST_PORT}")
 
 
+### User object
+
+class UnauthenticatedUser:
+
+    @property
+    def is_authenticated(self):
+        return False
+
+
+class User:
+
+    def __init__(self, *, active, id, email, insertInstant,
+            lastUpdateInstant, lastLoginInstant, passwordLastUpdateInstant,
+            passwordChangeRequired, firstName=None, lastName=None, **kwargs):
+        """Enable `First name` and `Last name` in the application registration configs if
+        you want FusionAuth to provide them to be passed in here.
+        """
+        # TODO: extract group memberships from `memberships` kwarg
+        # TODO: username is application specific and needs to be extracted from registrations
+        self.active = active
+        self.user_id=id
+        self.email=email
+        self.first_name = firstName
+        self.last_name = lastName
+        self.created_at=insertInstant
+        self.updated_at=lastUpdateInstant
+        self.last_login=lastLoginInstant
+        self.pwd_updated_at=passwordLastUpdateInstant
+        self.pwd_change_required=passwordChangeRequired
+
+    @property
+    def is_authenticated(self):
+        return True
+
+
+### Helpers
+
+"""
+Any callback / redirect URLs must be specified in the "Authorized Redirect URLs" for the
+application OAuth config in FusionAuth.
+
+Be aware of trailing slash issues when configuring these URLs. E.g. Flask's url_for
+will include a trailing slash here on `url_for("index")`
+"""
+
+def fusionauth_register_url(code_challenge, scope="offline_access"):
+    """offline_access scope is specified in order to recieve a refresh token."""
+    callback = urllib.parse.quote_plus(url_for("oauth_callback", _external=True))
+    return f"http://{FUSIONAUTH_HOST_IP}:{FUSIONAUTH_HOST_PORT}/oauth2/register?client_id={CLIENT_ID}&response_type=code&code_challenge={code_challenge}&code_challenge_method=S256&scope={scope}&redirect_uri={callback}"
+
+
+def fusionauth_login_url(code_challenge, scope="offline_access"):
+    """offline_access scope is specified in order to recieve a refresh token."""
+    callback = urllib.parse.quote_plus(url_for("oauth_callback", _external=True))
+    return f"http://{FUSIONAUTH_HOST_IP}:{FUSIONAUTH_HOST_PORT}/oauth2/authorize?client_id={CLIENT_ID}&response_type=code&code_challenge={code_challenge}&code_challenge_method=S256&scope={scope}&redirect_uri={callback}"
+
+
+def fusionauth_logout_url():
+    """
+    Alternatively to specifying the `post_logout_redirect_uri`, set the Logout URL in
+    the application configuration OAuth tab.
+    """
+    redir = urllib.parse.quote_plus(url_for("index", _external=True))
+    return f"http://{FUSIONAUTH_HOST_IP}:{FUSIONAUTH_HOST_PORT}/oauth2/logout?client_id={CLIENT_ID}&post_logout_redirect_uri={redir}"
+
+
+def user_is_registered(registrations, app_id=CLIENT_ID):
+    return all([
+        registrations is not None,
+        len(registrations) > 0,
+        any(r["applicationId"] == app_id and not "deactivated" in r["roles"] for r in registrations)])
+
+
+### Handlers
+
+@app.before_request
+def load_user():
+    """Using the session-stored access and refresh tokens provided by the FusionAuth
+    login, fetch the user info from FusionAuth and set the user object on the request.
+
+    It is not recommended to directly set the user in the session due to the fact that
+    user info may be modified in FusionAuth, including administrative deactivation,
+    during the session lifecycle. In any case, it is not recommended to set any
+    sensitive info in client-side cookies, thus the server-side Flask-Session extension
+    is used for session data storage.
+    """
+    user = UnauthenticatedUser()
+    access_token = session.get("access_token")
+    refresh_token = session.get("refresh_token")
+    if access_token:
+        user_resp = client.retrieve_user_using_jwt(access_token)
+        if not user_resp.was_successful() and refresh_token:
+            token_resp = client.exchange_refresh_token_for_access_token(
+                refresh_token,
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET)
+            if token_resp.was_successful():
+                access_token = token_resp.success_response["access_token"]
+                refresh_token = token_resp.success_response["refresh_token"]
+                session["access_token"] = access_token
+                session["refresh_token"] = refresh_token
+            else:
+                access_token = None
+                refresh_token = None
+        if access_token is not None:
+            user_resp = client.retrieve_user_using_jwt(access_token)
+            if user_resp.was_successful():
+                registrations = user_resp.success_response["user"]["registrations"]
+                if user_is_registered(registrations):
+                    user = User(**user_resp.success_response["user"])
+                else: # The user registration may have been administratively deleted
+                    pass
+    request.user = user
+
+
+### Routes
 
 @app.route("/")
 def index():
-    code_verifier, code_challenge = pkce.generate_pkce_pair()
-    login_uri = "http://{}:9011/oauth2/authorize?client_id={}&response_type=code&redirect_uri=http%3A%2F%2F{}%3A5000%2Foauth-callback&code_challenge={}&code_challenge_method=S256".format(
-        host_ip, client_id, host_ip, code_challenge
-    )
-    register_uri = "http://{}:9011/oauth2/register?client_id={}&response_type=code&redirect_uri=http%3A%2F%2F{}%3A5000%2Foauth-callback&code_challenge={}&code_challenge_method=S256".format(
-        host_ip, client_id, host_ip, code_challenge
-    )
-    # save the verifier in session to send it later to the token endpoint
-    session['code_verifier'] = code_verifier
-    return render_template("public/index.html", login_uri=login_uri, register_uri=register_uri)
+    return render_template("public/index.html")
 
+
+#def _callback(do_register=False):
 @app.route("/oauth-callback")
 def oauth_callback():
+    request.user = UnauthenticatedUser()
+    if "access_token" in session:
+        del session["access_token"]
+    if "refresh_token" in session:
+        del session["refresh_token"]
+
     if not request.args.get("code"):
-        uri = "http://{}:5000/".format(host_ip)
         return render_template(
             "public/error.html",
-            uri=uri,
             msg="Failed to get auth token.",
             reason=request.args["error_reason"],
             description=request.args["error_description"]
         )
-    
+    uri = url_for("oauth_callback", _external=True),
     tok_resp = client.exchange_o_auth_code_for_access_token_using_pkce(
         request.args.get("code"),
-        "http://{}:5000/oauth-callback".format(host_ip),
+        uri,
         session['code_verifier'],
-        client_id,
-        client_secret,
+        CLIENT_ID,
+        CLIENT_SECRET,
     )
     if not tok_resp.was_successful():
-        print("Failed to get token! Error: {}".format(tok_resp.error_response))
-        uri = "http://{}:5000/".format(host_ip)
         return render_template(
             "public/error.html",
-            uri=uri,
             msg="Failed to get auth token.",
             reason=tok_resp.error_response["error_reason"],
             description=tok_resp.error_response["error_description"],
         )
+    access_token = tok_resp.success_response["access_token"]
+    refresh_token = tok_resp.success_response.get("refresh_token")
+    assert refresh_token is not None, 'To receive a refresh token, be sure to enable ' \
+        '"Generate Refresh Tokens" for the app, and specify `scope=offline_access` in '\
+        'the request to the authorize endpoint.'
 
-    user_resp = client.retrieve_user_using_jwt(tok_resp.success_response["access_token"])
+    user_resp = client.retrieve_user_using_jwt(access_token)
     if not user_resp.was_successful():
-        print("Failed to get user info! Error: {}".format(user_resp.error_response))
-        uri = "http://{}:5000/".format(host_ip)
         return render_template(
             "public/error.html",
-            uri=uri,
             msg="Failed to get user info.",
             reason=tok_resp.error_response["error_reason"],
             description=tok_resp.error_response["error_description"],
         )
 
     registrations = user_resp.success_response["user"]["registrations"]
-    if registrations is None or len(registrations) == 0 or not any(r["applicationId"] == client_id for r in registrations):
-        print("User not registered for the application.")
-        uri = "http://{}:5000/".format(host_ip)
+
+    if not user_is_registered(registrations):
         return render_template(
             "public/error.html",
-            uri=uri,
             msg="User not registered for this application.",
             reason="Application id not found in user object.",
             description="Did you create a registration for this user and this application?"
         )
 
-    uri = "http://{}:9011/oauth2/logout?client_id={}".format(host_ip, client_id)
-    return render_template(
-        "public/logged_in.html",
-        uri=uri,
-        user_id=user_resp.success_response["user"]["id"],
-        email=user_resp.success_response["user"]["email"],
-        created_at=user_resp.success_response["user"]["insertInstant"],
-        updated_at=user_resp.success_response["user"]["lastUpdateInstant"],
-        last_login=user_resp.success_response["user"]["lastLoginInstant"],
-        pwd_updated_at=user_resp.success_response["user"]["passwordLastUpdateInstant"],
-        pwd_change=user_resp.success_response["user"]["passwordChangeRequired"]
-    )
+    request.user = User(**user_resp.success_response["user"])
+    session["access_token"] = access_token
+    session["refresh_token"] = refresh_token
+    return redirect("/")
+
+
+@app.route("/register")
+def register():
+    """To use registration, enable self-service registration in the Registration tab of
+    the application configuration in FusionAuth. You may also want to enable specific
+    registration properties such as First Name and Last Name to be passed into the
+    User constructor.
+    """
+    code_verifier, code_challenge = pkce.generate_pkce_pair()
+    session['code_verifier'] = code_verifier
+    return redirect(fusionauth_register_url(code_challenge))
+
+
+@app.route("/login")
+def login():
+    code_verifier, code_challenge = pkce.generate_pkce_pair()
+    # save the verifier in session to send it later to the token endpoint
+    session['code_verifier'] = code_verifier
+    return redirect(fusionauth_login_url(code_challenge))
+
 
 @app.route("/logout")
 def logout():
-    uri = "http://{}:5000/".format(host_ip)
-    return render_template("public/logged_out.html", uri=uri)
+    revoke_resp = client.revoke_refresh_tokens_by_application_id(CLIENT_ID)
+    # TODO: should we check for success?
+
+    # IMPORTANT: For the access token especially, if we do not delete it from
+    # the session, the user will still be logged in for the duration of the token's
+    # lifetime, which is specified by the application's "JWT duration" setting in
+    # FusionAuth. FusionAuth does not provide a way to invalidate the access token.
+    # See [RFC 7009](https://github.com/FusionAuth/fusionauth-issues/issues/201)
+    if "access_token" in session:
+        del session["access_token"]
+    if "refresh_token" in session:
+        del session["refresh_token"]
+
+    return redirect(fusionauth_logout_url())
 
 
 @app.route("/favicon.ico")
@@ -108,9 +247,3 @@ def favicon():
         "favicon.ico",
         mimetype="image/vnd.microsoft.icon",
     )
-
-# app = Flask(__name__)
-# app.secret_key = os.urandom(24)
-# if __name__ == "__main__":
-#     app.secret_key = os.urandom(24)
-#     app.run(debug=True)

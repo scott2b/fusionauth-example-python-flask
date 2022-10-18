@@ -13,7 +13,7 @@
 
     <script type="text/javascript">
       document.getElementById("home_button").onclick = function () {
-        location.href = "{{uri | safe}}";
+        location.href = "{{ url_for('index') }}";
       };
     </script>
 {% endblock %}
