@@ -22,7 +22,7 @@ This is based on the [5 minute setup guide](https://fusionauth.io/docs/v1/tech/5
         - `http://localhost:5000/`
     - Turn on the "Generate Refresh Tokens" setting. This is required in order to receive a refresh token
     - Select "Refresh Token" as an enabled grant. This is required in order to enable refresh requests to work
-    - Create a role in the application called "deactivated". See discussion below under [User invalidation](#user-invalidatin)
+    - Create a role in the application called "deactivated". See discussion below under [User invalidation](#user-invalidation)
     - Note the client id and client secret
   * Register a user for this application
 * Create an API key in FusionAuth. (Optional, only if you want to use the client for API operations.)
@@ -102,12 +102,12 @@ administratively deactivating a user for a given application. Neither deleting t
 user's application registration nor deleting the actual user is a sure path to success
 as the user and/or registration may be re-generated through certain application requests.
 
-An attempt was made at an approach of utiling an active role for the application. The
+An attempt was made at an approach of utilizing an active role for the application. The
 workflow for this approach is a bit elusive: the role cannot be the default, or it 
 will simply be re-generated along with the re-generated registration. Setting the role
 explicitly upon registration can be a bit tricky because the related workflow issues
 make it difficult to descern a legitimate registration callback from various workflow
-callbacks. The following approach is being explored as a result:
+callbacks. The following approach is instead being explored as a result:
 
 The selected approach to dealing with this is to add a "deactivated" role for the
 application. This role is checked during the user lookup, and a user with the
