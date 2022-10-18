@@ -115,7 +115,7 @@ deactivated role is considered not to be registered with the application. Thus, 
 administratively deactivate the user for the application, do not delete the user or
 the user's registrations, but instead assign the user to the deactivated role.
 This is not a perfect solution, but it seems to work better than an "active" role approach.
-"""
+
 
 # Contributors
 
